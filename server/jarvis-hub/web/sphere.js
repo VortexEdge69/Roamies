@@ -24,14 +24,17 @@ export function createSphere(canvas) {
 
   const css = (v) => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
 
+  // doc: the brain view ({ notes, commitments, facts }) or a memory doc. Notes are the brightest nodes and carry
+  // visible labels, so the globe shows what you're actually working on.
   function setMemory(doc) {
     const items = [
-      ...(doc?.facts ?? []).map((f) => ({ id: f.id, kind: 'fact', label: f.text })),
+      ...(doc?.notes ?? []).map((n) => ({ id: n.id, kind: 'note', label: n.title })),
       ...(doc?.commitments ?? []).filter((c) => c.status === 'open').map((c) => ({ id: c.id, kind: c.due && c.due < Date.now() ? 'overdue' : 'task', label: c.text })),
+      ...(doc?.facts ?? []).slice(0, 80).map((f) => ({ id: f.id, kind: 'fact', label: f.text })),
     ];
     const pts = golden(Math.max(items.length, 1));
     const old = new Map(nodes.map((n) => [n.id, n]));
-    nodes = items.map((it, i) => ({ ...it, p: pts[i], born: old.get(it.id)?.born ?? performance.now() }));
+    nodes = items.map((it, i) => ({ ...it, p: pts[i], born: old.get(it.id)?.born ?? performance.now(), labelled: i < 6 && it.kind !== 'fact' }));
     pulse = 1;
   }
 
@@ -89,7 +92,7 @@ export function createSphere(canvas) {
       return { n, x, y, z, ax, ay, age };
     }).sort((a, b) => a.z - b.z);
     for (const q of placed) {
-      const col = q.n.kind === 'fact' ? accent : q.n.kind === 'overdue' ? hot : warm;
+      const col = q.n.kind === 'note' ? '#ffffff' : q.n.kind === 'fact' ? accent : q.n.kind === 'overdue' ? hot : warm;
       const depth = (q.z + 1) / 2;
       ctx.strokeStyle = hexA(col, (0.06 + depth * 0.22) * q.age);
       ctx.lineWidth = 1;
@@ -98,6 +101,16 @@ export function createSphere(canvas) {
       ctx.fillStyle = hexA(col, (0.3 + depth * 0.7) * q.age);
       ctx.beginPath(); ctx.arc(q.x, q.y, s, 0, TAU); ctx.fill();
       if (pointer && Math.hypot(pointer.x - q.x, pointer.y - q.y) < 14 && depth > 0.35) hover = q;
+      // Front-facing notes and tasks name themselves.
+      if (q.n.labelled && depth > 0.42 && q !== hover) {
+        const t = q.n.label.length > 28 ? q.n.label.slice(0, 26) + '…' : q.n.label;
+        ctx.font = '11px ui-sans-serif, system-ui, sans-serif';
+        ctx.fillStyle = hexA(q.n.kind === 'note' ? (css('--text') || '#d9fbff') : col, 0.45 + depth * 0.5);
+        const right = q.x >= cx;
+        ctx.textAlign = right ? 'left' : 'right';
+        ctx.fillText(t, q.x + (right ? 8 : -8), q.y + 4);
+        ctx.textAlign = 'left';
+      }
     }
     if (hover) {
       const text = hover.n.label.length > 60 ? hover.n.label.slice(0, 57) + '…' : hover.n.label;

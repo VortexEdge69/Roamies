@@ -45,8 +45,10 @@ if ! command -v node >/dev/null || [ "$(node -p 'process.versions.node.split("."
 fi
 echo "   node $(node -v)"
 
-echo "==> Caddy"
-if ! command -v caddy >/dev/null; then
+USE_NGINX=0
+if systemctl is-active --quiet nginx 2>/dev/null; then USE_NGINX=1; fi
+echo "==> Web server: $([ $USE_NGINX = 1 ] && echo 'nginx is already running, using it (no Caddy)' || echo Caddy)"
+if [ "$USE_NGINX" = 0 ] && ! command -v caddy >/dev/null; then
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor --yes -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
   curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' > /etc/apt/sources.list.d/caddy-stable.list
   apt-get update -qq && apt-get install -y -qq caddy >/dev/null
@@ -54,7 +56,7 @@ fi
 
 echo "==> User and folders"
 id jarvis >/dev/null 2>&1 || useradd --system --home "$APP" --shell /usr/sbin/nologin jarvis
-mkdir -p "$DATA" && chown jarvis:jarvis "$DATA" && chmod 700 "$DATA"
+mkdir -p "$DATA" && chown -R jarvis:jarvis "$DATA" && chmod 700 "$DATA"
 
 echo "==> Code"
 if [ -d "$APP/.git" ]; then
@@ -99,6 +101,14 @@ systemctl restart jarvis-hub
 systemctl start jarvis-hub-update.timer
 
 echo "==> HTTPS"
+if [ "$USE_NGINX" = 1 ]; then
+  if grep -rqs "server_name[^;]*$DOMAIN" /etc/nginx/sites-enabled /etc/nginx/conf.d; then
+    echo "   nginx already serves $DOMAIN; check it matches $HUB/deploy/nginx-jarvis.conf (WebSocket headers, no auth_basic)"
+  else
+    echo "   Add the nginx site:  sed 's/jarvis.vecrahost.in/$DOMAIN/g' $HUB/deploy/nginx-jarvis.conf | sudo tee /etc/nginx/sites-available/jarvis"
+    echo "   then: sudo ln -sf /etc/nginx/sites-available/jarvis /etc/nginx/sites-enabled/ && sudo certbot --nginx -d $DOMAIN && sudo nginx -t && sudo systemctl reload nginx"
+  fi
+else
 CF=/etc/caddy/Caddyfile
 if ! grep -q "^$DOMAIN" "$CF" 2>/dev/null; then
   if grep -qE "^:80" "$CF" 2>/dev/null; then cp "$CF" "$CF.default.bak"; : > "$CF"; fi
@@ -106,6 +116,7 @@ if ! grep -q "^$DOMAIN" "$CF" 2>/dev/null; then
 fi
 caddy validate --config "$CF" --adapter caddyfile >/dev/null
 systemctl reload caddy 2>/dev/null || systemctl restart caddy
+fi
 
 echo "==> Firewall"
 ufw allow OpenSSH >/dev/null; ufw allow 80/tcp >/dev/null; ufw allow 443/tcp >/dev/null

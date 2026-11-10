@@ -43,6 +43,8 @@ cd /opt/jarvis/server/jarvis-hub
 sudo -u jarvis node src/cli.mjs add tablet phone
 sudo -u jarvis node src/cli.mjs list
 sudo -u jarvis node src/cli.mjs remove phone    # revoke a lost device
+sudo -u jarvis node src/cli.mjs doctor [token]  # why is a token rejected? checks owners, files, the running hub
+sudo node src/cli.mjs repair                    # bring back devices lost to unreadable/corrupt devices.json
 ```
 
 ## Connect your devices
@@ -67,7 +69,7 @@ The hub replies `{"type":"heard","text":…}` then `{"type":"reply","text":…}`
 
 ## API
 
-All `/v1/*` calls need `Authorization: Bearer <device token>`. WebSockets can send the token as the subprotocol `bearer.<token>` alongside `jarvis.v1` (browsers can't set headers).
+All `/v1/*` calls need the device token, as `X-Jarvis-Token: <token>` or `Authorization: Bearer <token>`. Behind nginx use `deploy/nginx-jarvis.conf` (WebSocket upgrade headers, no `auth_basic`). WebSockets can send the token as the subprotocol `bearer.<token>` alongside `jarvis.v1` (browsers can't set headers).
 
 | Method | Path | What |
 |---|---|---|
@@ -80,6 +82,8 @@ All `/v1/*` calls need `Authorization: Bearer <device token>`. WebSockets can se
 | POST | `/v1/chat` | `{text, voice?, target?:"desktop"}` → `{reply}` |
 | POST | `/v1/transcribe` | Audio body (webm/ogg/m4a/mp3/wav, or raw PCM16 as `application/octet-stream` with `?rate=`) → `{text}` |
 | POST | `/v1/say` | `{text, target?}` make a device speak |
+| GET | `/v1/brain` | Notes, open commitments, digests of recent desktop conversations, facts, recent chats |
+| GET/POST | `/v1/notes` | Your work notes (`{title, text, tags}`); `PUT`/`DELETE /v1/notes/:id` |
 | GET | `/v1/devices` | Registered devices |
 | WS | `/v1/live` | Events: `memory`, `say`, `prompt`, `turn`, `reminder`, `presence`, `wake_granted`/`wake_yield`. Send `hello`, `chat`, `wake`, `say`, `prompt`, `turn` |
 | WS | `/v1/audio` | Pendant audio (above) |

@@ -43,15 +43,32 @@
   .setup p { color: var(--dim); margin: 0; }
   .setup code { color: var(--accent); }
   .hidden { display: none !important; }
-  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 16px; width: min(560px, calc(100% - 32px)); max-height: 80dvh; padding: 0; }
-  dialog::backdrop { background: rgba(0,0,0,.6); }
-  dialog .head { display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
-  dialog .head h2 { font-size: 15px; margin: 0; letter-spacing: .1em; text-transform: uppercase; }
-  dialog .head button { margin-left: auto; min-height: 36px; }
-  dialog ul { list-style: none; margin: 0; padding: 8px 16px 16px; }
-  dialog li { padding: 8px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; }
-  dialog li .k { font-size: 11px; color: var(--dim); min-width: 64px; text-transform: uppercase; letter-spacing: .06em; padding-top: 2px; }
-  dialog h3 { font-size: 12px; color: var(--dim); margin: 14px 16px 0; text-transform: uppercase; letter-spacing: .12em; }
+  /* Brain: a full-screen view of what Jarvis knows about your work */
+  .brain { position: fixed; inset: 0; z-index: 10; background: var(--bg); display: flex; flex-direction: column; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  .brain .head { display: flex; align-items: center; gap: 8px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  .brain .head h2 { font-size: 14px; margin: 0; letter-spacing: .24em; text-transform: uppercase; font-weight: 600; }
+  .brain .head button { margin-left: auto; min-height: 36px; }
+  .brain .tabs { display: flex; gap: 6px; padding: 10px 16px 0; overflow-x: auto; scrollbar-width: none; }
+  .brain .tabs button { flex: 0 0 auto; min-height: 34px; padding: 0 12px; border-radius: 17px; font-size: 13px; color: var(--dim); white-space: nowrap; }
+  .brain .tabs button[aria-selected=true] { color: var(--text); border-color: var(--accent); background: rgba(111,243,255,.1); }
+  .brain .tabs .n { color: var(--dim); font-size: 11px; margin-left: 4px; }
+  .brain .tools { display: flex; gap: 8px; padding: 10px 16px; }
+  .brain .tools input { min-height: 40px; padding: 8px 12px; }
+  .brain .body { flex: 1; overflow-y: auto; padding: 0 16px 24px; }
+  .card { border: 1px solid var(--line); background: var(--panel); border-radius: 12px; padding: 12px 14px; margin: 0 0 10px; }
+  .card h4 { margin: 0 0 4px; font-size: 15px; font-weight: 600; }
+  .card .meta { font-size: 12px; color: var(--dim); display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 6px; }
+  .card .tag { color: var(--accent); }
+  .card p { margin: 6px 0 0; white-space: pre-wrap; word-wrap: break-word; color: #c4e9ee; }
+  .card .turn { margin: 6px 0 0; font-size: 13px; color: #b0d6dc; }
+  .card .turn b { color: var(--dim); font-weight: 500; margin-right: 6px; }
+  .card .row { display: flex; gap: 8px; margin-top: 10px; }
+  .card .row button { min-height: 34px; font-size: 13px; }
+  .card.overdue { border-color: rgba(255,92,108,.5); }
+  .card.done h4 { text-decoration: line-through; color: var(--dim); }
+  .empty { color: var(--dim); text-align: center; padding: 32px 8px; }
+  .editor textarea { width: 100%; min-height: 160px; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 12px; padding: 12px; font: inherit; resize: vertical; }
+  .editor input { width: 100%; margin-bottom: 8px; }
 </style>
 </head>
 <body>
@@ -66,7 +83,7 @@
   <main id="app" class="hidden" style="display:flex;flex-direction:column;flex:1">
     <header>
       <h1>Jarvis</h1>
-      <button id="brainBtn" class="chip" aria-label="What Jarvis remembers">Brain</button>
+      <button id="brainBtn" class="chip" aria-label="Your notes and what Jarvis knows about your work">Brain</button>
       <span class="status"><span id="dot" class="dot"></span><span id="statusText">Connecting…</span></span>
     </header>
     <div class="stage">
@@ -90,12 +107,22 @@
     </form>
   </main>
 
-  <dialog id="brain">
-    <div class="head"><h2>What Jarvis remembers</h2><button id="closeBrain">Close</button></div>
-    <h3>Open commitments</h3><ul id="tasks"></ul>
-    <h3>Facts</h3><ul id="facts"></ul>
-    <div style="padding:0 16px 16px"><button id="logout" class="chip">Forget this device's token</button></div>
-  </dialog>
+  <section id="brain" class="brain hidden" aria-label="Jarvis's brain">
+    <div class="head"><h2>Brain</h2><button id="closeBrain">Close</button></div>
+    <div class="tabs" role="tablist">
+      <button role="tab" data-tab="notes" aria-selected="true">Notes<span class="n" id="nNotes"></span></button>
+      <button role="tab" data-tab="tasks">Working on<span class="n" id="nTasks"></span></button>
+      <button role="tab" data-tab="work">Recent work<span class="n" id="nWork"></span></button>
+      <button role="tab" data-tab="facts">Remembered<span class="n" id="nFacts"></span></button>
+      <button role="tab" data-tab="chats">Chats<span class="n" id="nChats"></span></button>
+    </div>
+    <div class="tools">
+      <input id="brainSearch" type="text" placeholder="Search your notes and work…" aria-label="Search">
+      <button id="newNote" class="primary">New note</button>
+    </div>
+    <div id="brainBody" class="body"></div>
+    <div style="padding:0 16px 12px"><button id="logout" class="chip">Forget this device's token</button></div>
+  </section>
   <script type="module" src="app.js"></script>
 </body>
 </html>

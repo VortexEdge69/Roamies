@@ -88,6 +88,22 @@ assert.equal((await d.next('wake_yield')).by, 'phone');
 const c = await (await api('POST', '/v1/chat', phone, { text: 'hello' })).json();
 assert.match(c.reply, /API key/);
 
+// the token also works as X-Jarvis-Token, alongside an nginx basic-auth Authorization header
+assert.equal((await fetch(base + '/v1/me', { headers: { 'x-jarvis-token': phone, authorization: 'Basic YTpi' } })).status, 200);
+
+// notes: create, update, list in the brain view with the uploaded desktop conversation
+const n1 = await (await api('POST', '/v1/notes', phone, { title: 'Kreedo server', text: 'Single rack, 4000 viewers', tags: 'kreedo' })).json();
+assert.match(n1.note.id, /^n[0-9a-f]{8}$/);
+assert.equal((await d.next('notes')).type, 'notes', 'other devices hear about new notes');
+assert.equal((await api('PUT', `/v1/notes/${n1.note.id}`, phone, { title: 'Kreedo server', text: 'Budget under 10 lakh' })).status, 200);
+assert.equal((await api('POST', '/v1/notes', phone, {})).status, 400);
+const bv = await (await api('GET', '/v1/brain', phone)).json();
+assert.equal(bv.notes[0].text, 'Budget under 10 lakh');
+assert.equal(bv.work[0].id, s1.id);
+assert.equal(bv.work[0].title, 'hi');
+assert.ok(bv.facts.length >= 1 && bv.commitments.length >= 1);
+assert.equal((await api('DELETE', `/v1/notes/${n1.note.id}`, phone)).status, 200);
+
 // devices list hides token hashes
 const devs = await (await api('GET', '/v1/devices', desk)).json();
 assert.equal(JSON.stringify(devs).includes('tokenHash'), false);

@@ -27,6 +27,7 @@ sudo -u jarvis git reset --hard -q "$NEW"
 sudo -u jarvis bash -c "cd '$HUB' && npm ci --no-audit --no-fund -q" || rollback "npm ci"
 sudo -u jarvis bash -c "cd '$HUB' && HUB_ENV_FILE=/nonexistent npm test --silent" || rollback "tests"
 sudo -u jarvis bash -c "cd '$HUB' && npm prune --omit=dev --no-audit --no-fund -q" || true
+chown -R jarvis:jarvis /var/lib/jarvis-hub   # files left root-owned by manual commands lock the hub out
 cp "$HUB/deploy/jarvis-hub.service" /etc/systemd/system/jarvis-hub.service && systemctl daemon-reload
 systemctl restart jarvis-hub
 for i in $(seq 1 15); do

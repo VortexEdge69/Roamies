@@ -31,7 +31,7 @@ const VERSION = '0.1.0';
 // ---------- small helpers ----------
 
 const json = (res, code, body) => {
-  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' });
+  res.writeHead(code, { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store', ...(code === 401 ? { 'www-authenticate': 'Bearer realm="jarvis"' } : {}) });
   res.end(JSON.stringify(body));
 };
 const readBody = (req, limit) => new Promise((resolve, reject) => {
@@ -48,9 +48,13 @@ const ipOf = (req) => (HOST === '127.0.0.1' && req.headers['x-forwarded-for']?.s
 const throttled = (ip) => { const f = fails.get(ip); return f && f.n >= 20 && Date.now() - f.at < 10 * 60_000; };
 const failed = (ip) => { const f = fails.get(ip); fails.set(ip, f && Date.now() - f.at < 10 * 60_000 ? { n: f.n + 1, at: f.at } : { n: 1, at: Date.now() }); };
 
+// The token can come as X-Jarvis-Token (works behind an nginx auth_basic, which owns the Authorization header),
+// as "Authorization: Bearer …", or for WebSockets as the subprotocol "bearer.<token>".
 function tokenFrom(req) {
+  const x = req.headers['x-jarvis-token'];
+  if (typeof x === 'string' && x.trim()) return db.cleanToken(x);
   const h = req.headers.authorization;
-  if (h?.startsWith('Bearer ')) return h.slice(7).trim();
+  if (h && /^Bearer\s/i.test(h)) return db.cleanToken(h);
   const proto = String(req.headers['sec-websocket-protocol'] ?? '').split(',').map((s) => s.trim()).find((s) => s.startsWith('bearer.'));
   return proto ? proto.slice(7) : null;
 }
@@ -114,8 +118,9 @@ async function afterMemoryChange(fromName) {
 
 async function handleChat(text, { device, kind, voice, asker }) {
   const ctx = { device, kind, voice, desktopOnline: desktops().length > 0, runOnDesktop: (t) => runOnDesktop(t, device) };
-  const { reply, memoryChanged } = await chat(text, ctx);
+  const { reply, memoryChanged, notesChanged } = await chat(text, ctx);
   if (memoryChanged) await afterMemoryChange('hub');
+  if (notesChanged) broadcast({ type: 'notes', from: 'hub' });
   broadcast({ type: 'turn', from: device, user: text, reply }, asker);
   return reply;
 }
@@ -168,7 +173,7 @@ const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://hub');
   const p = url.pathname;
   try {
-    if (p === '/health') return json(res, 200, { ok: true, version: VERSION, brain: brainReady(), stt: sttReady(), online: online().length });
+    if (p === '/health') return json(res, 200, { ok: true, version: VERSION, brain: brainReady(), stt: sttReady(), online: online().length, devices: db.listDevices().length, devicesProblem: !!db.devicesProblem() });
     if (!p.startsWith('/v1/')) return req.method === 'GET' ? serveStatic(req, res, p) : json(res, 405, { error: 'method not allowed' });
 
     const a = auth(req);
@@ -219,6 +224,25 @@ const server = http.createServer(async (req, res) => {
       const target = body.target || speakerFor(me);
       const n = target ? sendTo(String(target), { type: 'say', text, from: me }) : 0;
       return json(res, n ? 200 : 409, n ? { sent: target } : { error: 'no device to speak on' });
+    }
+
+    if (p === '/v1/brain' && req.method === 'GET') return json(res, 200, await db.brainView());
+    if (p === '/v1/notes' && req.method === 'GET') return json(res, 200, { notes: db.listNotes() });
+    if (p === '/v1/notes' && req.method === 'POST') {
+      const note = await db.saveNote(await readJsonBody(req) ?? {});
+      broadcast({ type: 'notes', from: me });
+      return json(res, 200, { note });
+    }
+    const nm = /^\/v1\/notes\/(n[0-9a-f]{8})$/.exec(p);
+    if (nm && req.method === 'PUT') {
+      const note = await db.saveNote({ ...(await readJsonBody(req) ?? {}), id: nm[1] });
+      broadcast({ type: 'notes', from: me });
+      return json(res, 200, { note });
+    }
+    if (nm && req.method === 'DELETE') {
+      const ok = await db.deleteNote(nm[1]);
+      if (ok) broadcast({ type: 'notes', from: me });
+      return json(res, ok ? 200 : 404, ok ? { ok } : { error: 'no such note' });
     }
 
     if (p === '/v1/devices' && req.method === 'GET') return json(res, 200, { devices: db.listDevices(), online: online().map((c) => c.name) });

@@ -2,6 +2,7 @@
 // Talks to the hub over one WebSocket: chats, hears other devices' turns, speaks "say" lines and reminders,
 // and joins wake-word arbitration so only one device answers "Jarvis".
 import { createSphere } from './sphere.js';
+import { createBrainView } from './brainview.js';
 
 const $ = (id) => document.getElementById(id);
 const store = {
@@ -18,7 +19,7 @@ const NATIVE = window.JarvisNative ?? null;
 }
 const prefs = { voice: store.get('voice', '1') === '1', desk: store.get('desk') === '1', wake: store.get('wake') === '1' };
 let token = store.get('token');
-let ws = null, backoff = 1000, reqId = 0;
+let ws = null, backoff = 1000, reqId = 0, stopRetry = false;
 const sphere = createSphere($('sphere'));
 
 if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
@@ -31,9 +32,9 @@ function showSetup(err = '') {
 $('save').onclick = async () => {
   const t = $('token').value.trim();
   if (!t.startsWith('jh_')) return showSetup('That doesn\'t look like a device token (they start with jh_).');
-  const r = await fetch('v1/me', { headers: { authorization: `Bearer ${t}` } }).catch(() => null);
+  const r = await fetch('v1/me', { headers: { 'x-jarvis-token': t } }).catch(() => null);
   if (!r?.ok) return showSetup(r?.status === 401 ? 'The hub didn\'t accept that token.' : 'Couldn\'t reach the hub.');
-  token = t; store.set('token', t); start();
+  token = t; store.set('token', t); stopRetry = false; start();
 };
 $('logout').onclick = () => { store.set('token', null); if (NATIVE) NATIVE.unpair(); else location.reload(); };
 
@@ -82,16 +83,21 @@ function connect() {
     else if (m.type === 'turn') { add('note', `${m.from}: ${m.user}`); add('', m.reply, `Jarvis · ${m.from}`); }
     else if (m.type === 'say') { add('', m.text, m.from ? `Jarvis · from ${m.from}` : 'Jarvis'); if (!NATIVE?.isListening()) speak(m.text); } // the app's background service speaks these itself
     else if (m.type === 'reminder') { add('note', m.text); loadMemory(); }
-    else if (m.type === 'memory') loadMemory();
+    else if (m.type === 'memory' || m.type === 'notes' || m.type === 'session') loadMemory();
     else if (m.type === 'wake_granted' || m.type === 'wake_yield') onWakeResult(m);
   };
-  ws.onclose = (e) => {
+  let opened = false;
+  ws.addEventListener('open', () => { opened = true; });
+  ws.onclose = () => {
     setStatus(false, 'Offline, retrying…');
-    if (e.code === 1006 && backoff > 8000) {
-      // Repeated failures straight away: maybe the token was revoked.
-      fetch('v1/me', { headers: { authorization: `Bearer ${token}` } }).then((r) => { if (r.status === 401) { store.set('token', null); showSetup('This token was revoked. Paste a new one.'); } }).catch(() => {});
+    // Never got in: find out why straight away instead of retrying blindly.
+    if (!opened || backoff > 8000) {
+      fetch('v1/me', { headers: { 'x-jarvis-token': token } }).then((r) => {
+        if (r.status === 401) { stopRetry = true; store.set('token', null); showSetup('The hub rejected this token (revoked, or added to another hub). Paste a new one.'); }
+        else if (r.ok && !opened) setStatus(false, 'Token OK, but the live link is blocked: the proxy must pass WebSocket upgrades for /v1/live.');
+      }).catch(() => setStatus(false, 'Can\'t reach the hub, retrying…'));
     }
-    setTimeout(connect, backoff); backoff = Math.min(30000, backoff * 2);
+    if (!stopRetry) { setTimeout(connect, backoff); backoff = Math.min(30000, backoff * 2); }
   };
 }
 
@@ -106,25 +112,12 @@ function ask(text, { voice = false } = {}) {
 }
 $('bar').onsubmit = (e) => { e.preventDefault(); ask($('text').value); $('text').value = ''; };
 
-// ---------- memory / brain ----------
-let memory = null;
-async function loadMemory() {
-  const r = await fetch('v1/memory', { headers: { authorization: `Bearer ${token}` } }).catch(() => null);
-  if (!r?.ok) return;
-  memory = (await r.json()).doc;
-  sphere.setMemory(memory);
-  if ($('brain').open) renderBrain();
-}
-function renderBrain() {
-  const li = (k, t) => { const el = document.createElement('li'); const a = document.createElement('span'); a.className = 'k'; a.textContent = k; el.append(a, document.createTextNode(t)); return el; };
-  const fmt = (ms) => new Date(ms).toLocaleString(undefined, { weekday: 'short', day: 'numeric', month: 'short', hour: '2-digit', minute: '2-digit' });
-  const open = (memory?.commitments ?? []).filter((c) => c.status === 'open').sort((a, b) => (a.due ?? Infinity) - (b.due ?? Infinity));
-  $('tasks').replaceChildren(...(open.length ? open.map((c) => li(c.due ? (c.due < Date.now() ? 'overdue' : fmt(c.due)) : 'anytime', c.text)) : [li('', 'Nothing open.')]));
-  const facts = memory?.facts ?? [];
-  $('facts').replaceChildren(...(facts.length ? facts.slice().reverse().map((f) => li('fact', f.text)) : [li('', 'Nothing yet.')]));
-}
-$('brainBtn').onclick = () => { renderBrain(); $('brain').showModal(); };
-$('closeBrain').onclick = () => $('brain').close();
+// ---------- brain: notes and work, and the globe's memory nodes ----------
+const api = (path, opts = {}) => fetch(path, { ...opts, headers: { 'x-jarvis-token': token, ...(opts.body ? { 'content-type': 'application/json' } : {}), ...(opts.headers ?? {}) } })
+  .catch(() => new Response(null, { status: 0 }));
+const brain = createBrainView({ api, onData: (d) => sphere.setMemory(d) });
+const loadMemory = () => brain.load();
+$('brainBtn').onclick = () => brain.open();
 
 // ---------- hold-to-talk (recorded, transcribed on the hub) ----------
 let rec = null, chunks = [], stream = null, meter = null;
@@ -160,7 +153,7 @@ async function sendRec() {
   rec = null;
   if (blob.size < 2000) { sphere.setMode('idle'); caption(''); resumeWake(); return; }
   sphere.setMode('think'); caption('Transcribing…');
-  const r = await fetch('v1/transcribe', { method: 'POST', headers: { authorization: `Bearer ${token}`, 'content-type': blob.type }, body: blob }).catch(() => null);
+  const r = await fetch('v1/transcribe', { method: 'POST', headers: { 'x-jarvis-token': token, 'content-type': blob.type }, body: blob }).catch(() => null);
   const out = r?.ok ? await r.json() : null;
   if (!out) { sphere.setMode('idle'); caption(''); add('note', 'Transcription failed. Is STT_API_KEY set on the hub?'); resumeWake(); return; }
   if (!out.text) { sphere.setMode('idle'); caption('Didn\'t catch that.'); resumeWake(); return; }

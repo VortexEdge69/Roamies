@@ -13,7 +13,7 @@
   "scripts": {
     "start": "node src/hub.mjs",
     "device": "node src/cli.mjs",
-    "test": "node test/hub.test.mjs",
+    "test": "node test/devices.test.mjs && node test/hub.test.mjs",
     "login": "bash deploy/login.sh"
   },
   "dependencies": {
