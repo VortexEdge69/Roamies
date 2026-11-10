@@ -43,6 +43,11 @@ jobs:
         working-directory: showcase/tauri/sidecar
         run: npm test
 
+      - name: Test Jarvis Hub
+        if: runner.os == 'Linux'
+        working-directory: server/jarvis-hub
+        run: npm ci && npm test
+
       # Tauri's Linux build dependencies (v2.tauri.app/start/prerequisites, Debian list).
       - name: Install Tauri system dependencies
         if: runner.os == 'Linux'

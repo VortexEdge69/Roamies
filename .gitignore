@@ -18,3 +18,7 @@ node_modules/
 *.tmp
 .vscode/
 .idea/
+
+# Jarvis Hub runtime data and secrets
+server/jarvis-hub/data/
+server/jarvis-hub/.env

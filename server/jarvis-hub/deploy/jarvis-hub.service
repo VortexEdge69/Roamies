@@ -1,0 +1,30 @@
+[Unit]
+Description=Jarvis Hub (Roamies multi-device server)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=jarvis
+Group=jarvis
+WorkingDirectory=/opt/jarvis/server/jarvis-hub
+Environment=NODE_ENV=production
+Environment=HUB_ENV_FILE=/opt/jarvis/server/jarvis-hub/.env
+ExecStart=/usr/bin/node src/hub.mjs
+Restart=always
+RestartSec=3
+# Hardening
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/jarvis-hub
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

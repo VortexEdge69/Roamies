@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#04090d">
+<title>Jarvis</title>
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon.svg" type="image/svg+xml">
+<style>
+  :root {
+    --bg: #04090d; --panel: rgba(9, 22, 30, .92); --line: rgba(111, 243, 255, .18);
+    --text: #d9fbff; --dim: #7fa9b2; --accent: #6ff3ff; --warm: #ffc35c; --hot: #ff5c6c;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text); font: 15px/1.45 ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  body { display: flex; flex-direction: column; min-height: 100dvh; padding: env(safe-area-inset-top) 0 env(safe-area-inset-bottom); }
+  header { display: flex; align-items: center; gap: 10px; padding: 12px 16px; }
+  header h1 { font-size: 15px; letter-spacing: .28em; font-weight: 600; margin: 0; text-transform: uppercase; }
+  .status { margin-left: auto; font-size: 12px; color: var(--dim); display: flex; align-items: center; gap: 6px; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--hot); box-shadow: 0 0 8px currentColor; }
+  .dot.on { background: var(--accent); }
+  .stage { position: relative; flex: 1 1 auto; min-height: 260px; }
+  canvas { position: absolute; inset: 0; width: 100%; height: 100%; touch-action: none; }
+  .caption { position: absolute; left: 16px; right: 16px; bottom: 10px; text-align: center; color: var(--dim); font-size: 13px; min-height: 1.4em; }
+  .feed { max-height: 34dvh; overflow-y: auto; padding: 0 16px 8px; display: flex; flex-direction: column; gap: 8px; }
+  .msg { max-width: 88%; padding: 8px 12px; border-radius: 12px; border: 1px solid var(--line); background: var(--panel); white-space: pre-wrap; word-wrap: break-word; }
+  .msg.me { align-self: flex-end; border-color: rgba(111,243,255,.35); }
+  .msg .from { display: block; font-size: 11px; color: var(--dim); margin-bottom: 2px; letter-spacing: .04em; }
+  .msg.note { align-self: center; font-size: 12px; color: var(--dim); background: none; border-style: dashed; }
+  form.bar { display: flex; gap: 8px; padding: 10px 16px 14px; border-top: 1px solid var(--line); }
+  input[type=text], input[type=password] { flex: 1; min-width: 0; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px; font: inherit; }
+  input:focus { outline: 2px solid rgba(111,243,255,.5); outline-offset: 1px; }
+  button { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 12px; padding: 0 14px; min-height: 46px; min-width: 46px; font: inherit; cursor: pointer; }
+  button.primary { border-color: var(--accent); }
+  button.live { background: rgba(111,243,255,.18); border-color: var(--accent); }
+  button svg { width: 20px; height: 20px; vertical-align: middle; }
+  .toggles { display: flex; gap: 8px; padding: 0 16px 8px; flex-wrap: wrap; }
+  .chip { min-height: 34px; padding: 0 12px; border-radius: 17px; font-size: 13px; color: var(--dim); }
+  .chip[aria-pressed=true] { color: var(--text); border-color: var(--accent); background: rgba(111,243,255,.1); }
+  .setup { max-width: 440px; margin: 10vh auto 0; padding: 0 16px; display: flex; flex-direction: column; gap: 12px; }
+  .setup p { color: var(--dim); margin: 0; }
+  .setup code { color: var(--accent); }
+  .hidden { display: none !important; }
+  dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: 16px; width: min(560px, calc(100% - 32px)); max-height: 80dvh; padding: 0; }
+  dialog::backdrop { background: rgba(0,0,0,.6); }
+  dialog .head { display: flex; align-items: center; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+  dialog .head h2 { font-size: 15px; margin: 0; letter-spacing: .1em; text-transform: uppercase; }
+  dialog .head button { margin-left: auto; min-height: 36px; }
+  dialog ul { list-style: none; margin: 0; padding: 8px 16px 16px; }
+  dialog li { padding: 8px 0; border-bottom: 1px solid var(--line); display: flex; gap: 10px; }
+  dialog li .k { font-size: 11px; color: var(--dim); min-width: 64px; text-transform: uppercase; letter-spacing: .06em; padding-top: 2px; }
+  dialog h3 { font-size: 12px; color: var(--dim); margin: 14px 16px 0; text-transform: uppercase; letter-spacing: .12em; }
+</style>
+</head>
+<body>
+  <section id="setup" class="setup hidden">
+    <h1 style="letter-spacing:.28em;font-size:18px">JARVIS</h1>
+    <p>Paste this device's token. Make one on your VPS with <code>npm run device -- add phone phone</code>.</p>
+    <input id="token" type="password" placeholder="jh_…" autocomplete="off" spellcheck="false" aria-label="Device token">
+    <button id="save" class="primary">Connect</button>
+    <p id="setupErr" style="color:var(--hot)"></p>
+  </section>
+
+  <main id="app" class="hidden" style="display:flex;flex-direction:column;flex:1">
+    <header>
+      <h1>Jarvis</h1>
+      <button id="brainBtn" class="chip" aria-label="What Jarvis remembers">Brain</button>
+      <span class="status"><span id="dot" class="dot"></span><span id="statusText">Connecting…</span></span>
+    </header>
+    <div class="stage">
+      <canvas id="sphere" aria-label="Jarvis"></canvas>
+      <div id="caption" class="caption" aria-live="polite"></div>
+    </div>
+    <div class="toggles">
+      <button id="wakeBtn" class="chip" aria-pressed="false" title="Listen for the word Jarvis while this page is open">Hey Jarvis</button>
+      <button id="voiceBtn" class="chip" aria-pressed="true">Spoken replies</button>
+      <button id="deskBtn" class="chip" aria-pressed="false" title="Send requests to your desktop Jarvis instead">Run on desktop</button>
+    </div>
+    <div id="feed" class="feed" aria-live="polite"></div>
+    <form id="bar" class="bar">
+      <input id="text" type="text" placeholder="Ask Jarvis…" autocomplete="off" aria-label="Message">
+      <button id="mic" type="button" aria-label="Hold to talk">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+      </button>
+      <button class="primary" type="submit" aria-label="Send">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      </button>
+    </form>
+  </main>
+
+  <dialog id="brain">
+    <div class="head"><h2>What Jarvis remembers</h2><button id="closeBrain">Close</button></div>
+    <h3>Open commitments</h3><ul id="tasks"></ul>
+    <h3>Facts</h3><ul id="facts"></ul>
+    <div style="padding:0 16px 16px"><button id="logout" class="chip">Forget this device's token</button></div>
+  </dialog>
+  <script type="module" src="app.js"></script>
+</body>
+</html>

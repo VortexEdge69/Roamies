@@ -1,0 +1,10 @@
+# Jarvis Hub behind Caddy: automatic HTTPS (Let's Encrypt) and WebSocket proxying.
+# Point an A record for the domain at your VPS first.
+jarvis.example.com {
+	encode gzip
+	reverse_proxy 127.0.0.1:8787
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		-Server
+	}
+}

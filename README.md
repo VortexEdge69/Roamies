@@ -141,6 +141,10 @@ about the screen, go to the AI provider you pick. [PRIVACY.md](PRIVACY.md) lists
 2. Delete `%USERPROFILE%\.gg\sidekick` and `%USERPROFILE%\.gg\sidekick.json`. Keep `auth.json` if you use GG Coder.
 3. Delete the voice model folder, `%LOCALAPPDATA%\Roamies\models`.
 
+## Jarvis on every device (this fork)
+
+This fork adds **Jarvis Hub** ([`server/jarvis-hub`](server/jarvis-hub)): a small server for your VPS that gives the desktop app, your phone and a DIY mic pendant one shared memory and conversation history. Roamies stays local-first and works offline; add `~/.gg/sidekick/hub.json` with your hub URL and device token to turn syncing on. See the [hub README](server/jarvis-hub/README.md) for the one-command Ubuntu install, the installable phone client and the pendant protocol.
+
 ## Build with the framework
 
 Every Roamie's brain is a [gg-framework](https://github.com/KenKaiii/gg-framework) agent running in a Node

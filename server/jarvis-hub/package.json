@@ -1,0 +1,17 @@
+{
+  "name": "jarvis-hub",
+  "description": "Jarvis Hub: the central server for Roamies/Jarvis. One memory and conversation history shared by your desktop, phone and mic pendant.",
+  "private": true,
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "engines": { "node": ">=22" },
+  "bin": { "jarvis-hub": "src/cli.mjs" },
+  "scripts": {
+    "start": "node src/hub.mjs",
+    "device": "node src/cli.mjs",
+    "test": "node test/hub.test.mjs"
+  },
+  "dependencies": {
+    "ws": "8.22.2"
+  }
+}

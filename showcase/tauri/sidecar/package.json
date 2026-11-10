@@ -14,7 +14,7 @@
   },
   "scripts": {
     "build": "./bundle.sh",
-    "test": "node test/reply.test.mjs && node test/store.test.mjs && node test/brain.test.mjs && node test/pointing.test.mjs && node test/safety.test.mjs && node test/voicemodel.test.mjs && node test/agentstream.test.mjs && node test/claudecode.test.mjs && node test/providers.test.mjs && node test/toolschema.test.mjs && node test/hands.test.mjs && node test/toolplay.test.mjs && node test/marks.test.mjs && node test/draw.test.mjs && node test/markdown.test.mjs && node test/caret.test.mjs && node test/intro.test.mjs && node test/speech.test.mjs && node test/fish.test.mjs && node test/speaker.test.mjs && node test/secrets.test.mjs && node test/looks.test.mjs && node test/activity.test.mjs && node test/prompt.test.mjs && node test/platform.test.mjs",
+    "test": "node test/reply.test.mjs && node test/store.test.mjs && node test/brain.test.mjs && node test/pointing.test.mjs && node test/safety.test.mjs && node test/voicemodel.test.mjs && node test/agentstream.test.mjs && node test/claudecode.test.mjs && node test/providers.test.mjs && node test/toolschema.test.mjs && node test/hands.test.mjs && node test/toolplay.test.mjs && node test/marks.test.mjs && node test/draw.test.mjs && node test/markdown.test.mjs && node test/caret.test.mjs && node test/intro.test.mjs && node test/speech.test.mjs && node test/fish.test.mjs && node test/speaker.test.mjs && node test/secrets.test.mjs && node test/looks.test.mjs && node test/activity.test.mjs && node test/prompt.test.mjs && node test/platform.test.mjs && node test/syncmerge.test.mjs",
     "test:live": "node bench/memory.mjs"
   },
   "dependencies": {

@@ -6,6 +6,7 @@ import { existsSync, readFileSync, renameSync } from 'node:fs';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import { cleanDoc, mergeMemory } from './syncmerge.mjs';
 
 export const DIR = process.env.ROAMIES_DATA_DIR ? path.join(process.env.ROAMIES_DATA_DIR, 'sidekick') : path.join(os.homedir(), '.gg', 'sidekick');
 const SESSIONS = path.join(DIR, 'sessions');
@@ -238,9 +239,32 @@ const loadMemory = () => {
   }
   memory = m?.version === 1 && Array.isArray(m.commitments) ? m : { version: 1, commitments: [] };
   if (!Array.isArray(memory.facts)) memory.facts = []; // added later: older files have no facts yet
+  if (!memory.deleted || typeof memory.deleted !== 'object') memory.deleted = {}; // tombstones, for syncing deletions
   return memory;
 };
-const saveMemory = () => (memoryReadOnly ? Promise.resolve() : writeJson(MEMORY, memory, { backup: true }));
+// Called after every local change, so the Jarvis Hub sync (sync.mjs) can push it. Remote merges don't call it.
+const savedHooks = new Set();
+export const onMemorySaved = (fn) => { savedHooks.add(fn); return () => savedHooks.delete(fn); };
+const saveMemory = () => {
+  if (memoryReadOnly) return Promise.resolve();
+  const p = writeJson(MEMORY, memory, { backup: true });
+  for (const fn of savedHooks) { try { fn(); } catch (e) { console.error('[store] save hook', e); } }
+  return p;
+};
+const tombstone = (id, at = Date.now()) => { loadMemory().deleted[id] = at; };
+
+/** A copy of the whole memory document, for syncing. */
+export const memorySnapshot = () => structuredClone(cleanDoc(loadMemory()));
+
+/** Merges a document from the hub into local memory. Returns true if anything changed (and was saved). */
+export async function applyRemoteMemory(doc) {
+  if (memoryReadOnly) return false;
+  const { doc: merged, changed } = mergeMemory(loadMemory(), doc);
+  if (!changed) return false;
+  memory.commitments = merged.commitments; memory.facts = merged.facts; memory.deleted = merged.deleted;
+  await writeJson(MEMORY, memory, { backup: true });
+  return true;
+}
 
 /**
  * Due time → ms, or null for none, or undefined if unreadable. Accepts local times
@@ -293,7 +317,11 @@ export function listItems(now = Date.now()) {
 /** Deletes finished (done or dropped) entries from before today. Open ones are never touched. Returns how many went. */
 export async function clearFinished(now = Date.now()) {
   const today = startOfDay(now), m = loadMemory(), before = m.commitments.length;
-  m.commitments = m.commitments.filter((c) => c.status === 'open' || (c.doneAt ?? c.createdAt) >= today);
+  m.commitments = m.commitments.filter((c) => {
+    const keep = c.status === 'open' || (c.doneAt ?? c.createdAt) >= today;
+    if (!keep) tombstone(c.id, now);
+    return keep;
+  });
   if (m.commitments.length === before) return 0;
   await saveMemory();
   return before - m.commitments.length;
@@ -302,13 +330,14 @@ export async function clearFinished(now = Date.now()) {
 /** kind 'reminder': a plain "remind me", done once it has fired. 'commitment' (and older entries without a kind):
  *  something the user said they'd do, open until they finish or drop it. */
 export async function addCommitment(text, dueMs, kind = 'commitment') {
-  const c = { id: newId('c'), text: String(text).trim().slice(0, 200), due: dueMs ?? null, createdAt: Date.now(), status: 'open', remindedAt: null, kind: kind === 'reminder' ? 'reminder' : 'commitment' };
+  const c = { id: newId('c'), text: String(text).trim().slice(0, 200), due: dueMs ?? null, createdAt: Date.now(), status: 'open', remindedAt: null, kind: kind === 'reminder' ? 'reminder' : 'commitment', updatedAt: Date.now() };
   loadMemory().commitments.push(c);
   // Cap the file: the oldest finished entries go first; open ones are never dropped.
   const done = memory.commitments.filter((x) => x.status !== 'open');
   if (memory.commitments.length > 200) {
     const drop = new Set(done.sort((a, b) => (a.doneAt ?? a.createdAt) - (b.doneAt ?? b.createdAt)).slice(0, memory.commitments.length - 200).map((x) => x.id));
     memory.commitments = memory.commitments.filter((x) => !drop.has(x.id));
+    for (const id of drop) tombstone(id);
   }
   await saveMemory();
   return c;
@@ -319,6 +348,7 @@ export async function updateCommitment(id, { status, dueMs }) {
   if (!c) return null;
   if (status) { c.status = status; if (status !== 'open') c.doneAt = Date.now(); }
   if (dueMs !== undefined) { c.due = dueMs; c.remindedAt = null; }
+  c.updatedAt = Date.now();
   await saveMemory();
   return c;
 }
@@ -335,9 +365,9 @@ export async function addFact(text) {
   const facts = loadMemory().facts;
   const same = facts.find((f) => f.text.toLowerCase().replace(/[^a-z0-9 ]/g, '') === key);
   if (same) { same.updatedAt = Date.now(); await saveMemory(); return same; }
-  const f = { id: newId('f'), text: t, createdAt: Date.now() };
+  const f = { id: newId('f'), text: t, createdAt: Date.now(), updatedAt: Date.now() };
   facts.push(f);
-  if (facts.length > FACT_CAP) facts.splice(0, facts.length - FACT_CAP); // oldest go first
+  if (facts.length > FACT_CAP) for (const old of facts.splice(0, facts.length - FACT_CAP)) tombstone(old.id); // oldest go first
   await saveMemory();
   return f;
 }
@@ -367,6 +397,7 @@ export function touchFacts(ids) {
 
 export async function clearFacts() {
   const n = loadMemory().facts.length;
+  for (const f of memory.facts) tombstone(f.id);
   memory.facts = [];
   await saveMemory();
   return n;
@@ -376,6 +407,7 @@ export async function forgetFact(id) {
   const facts = loadMemory().facts, i = facts.findIndex((f) => f.id === id);
   if (i < 0) return null;
   const [f] = facts.splice(i, 1);
+  tombstone(f.id);
   await saveMemory();
   return f;
 }
@@ -386,7 +418,7 @@ export async function takeDueReminders(now = Date.now()) {
   const due = openCommitments().filter((c) => c.due && c.due <= now && !c.remindedAt);
   if (!due.length) return [];
   for (const c of due) {
-    c.remindedAt = now;
+    c.remindedAt = now; c.updatedAt = now;
     if (c.kind === 'reminder') { c.status = 'done'; c.doneAt = now; }
   }
   await saveMemory();

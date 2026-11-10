@@ -35,6 +35,7 @@ import { createSpeaker } from './speaker.mjs';
 import { DEFAULT_VOICE, FISH_CHOICES } from './fish.mjs';
 import { createSecrets, retryLoad } from './secrets.mjs';
 import { createActivity } from './activity.mjs';
+import { startSync } from './sync.mjs';
 import { canCircle, canSnap, hasHands, platformLine } from './platform.mjs';
 import { keyCards, keyKinds, signInCards } from './providers.mjs';
 
@@ -411,7 +412,23 @@ let agentStale = false;
 let session = null;
 // The last conversation: it carries on until New conversation (old turns are folded into a summary, not cut off).
 // Requests (and reminders due at launch) wait for it, so they continue it instead of starting a new one.
-const resumed = loadLatestSession().then((s) => { if (s && !session) session = s; }).catch((e) => console.error('resume', e));
+// Jarvis Hub (optional, see sync.mjs): memory and conversations shared with your other devices through your VPS.
+const hub = startSync({
+  onMemory: () => { try { menu(); scheduleReminders(); } catch {} },
+  onSay: (text) => { try { speakLine(text); } catch (e) { console.error('hub say', e); } },
+  onPrompt: (text, from) => { logLine('hub_prompt', { from, chars: text.length }); enqueue(text, { byVoice: true }); },
+  log: (kind, data) => logLine(kind, data),
+});
+// The newest conversation wins, whichever device it happened on, so you can carry on from your phone or the pendant.
+const resumed = loadLatestSession().then(async (s) => {
+  const remote = hub ? await hub.latestSession() : null;
+  if (remote?.messages?.length && remote.kind !== 'intro' && (!s || (remote.lastActiveAt ?? 0) > (s.lastActiveAt ?? 0))) {
+    const { device, ...rest } = remote;
+    s = rest;
+    console.error(`[sync] carrying on the conversation from ${device ?? 'another device'}`);
+  }
+  if (s && !session) session = s;
+}).catch((e) => console.error('resume', e));
 const BUDGET_CAP = 120_000;
 // Tokens per request: kept tight for a quick reply out loud. The ChatGPT plan has its own windows (accountId).
 let credsAccountId;
@@ -552,6 +569,7 @@ const syncSession = () => {
   session.messages = forDisk(withoutLive(agent.getMessages()));
   session.lastActiveAt = Date.now();
   if (pendingFold?.session === session) applyPendingFold(); else saveSession(session);
+  hub?.pushSession(session);
 };
 
 // ---------- folding old turns (compaction) ----------
@@ -1562,7 +1580,7 @@ createInterface({ input: process.stdin }).on('line', (line) => {
   // The app quit (or is restarting for an update): save a reply still running, let the last saves land, never hang.
   if (busy) syncSession();
   closeSpare();
-  Promise.race([flushWrites(), new Promise((r) => setTimeout(r, 3000))]).finally(() => process.exit(0));
+  Promise.race([flushWrites().then(() => hub?.stop()), new Promise((r) => setTimeout(r, 3000))]).finally(() => process.exit(0));
 });
 
 // Retired sign-ins (Claude from before Claude Code, the old ChatGPT, Kimi, Grok and Google ones) no longer work:
