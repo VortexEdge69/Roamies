@@ -8,6 +8,14 @@ const store = {
   get: (k, d = null) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } },
   set: (k, v) => { try { v == null ? localStorage.removeItem(k) : localStorage.setItem(k, v); } catch {} },
 };
+// The Android app opens this page as  /#native=1&device=…&token=…  (the fragment never reaches the server).
+const NATIVE = window.JarvisNative ?? null;
+{
+  const h = new URLSearchParams(location.hash.slice(1));
+  const t = h.get('token');
+  if (t && /^jh_[A-Za-z0-9_-]{20,100}$/.test(t)) { try { localStorage.setItem('token', t); } catch {} }
+  if (location.hash) history.replaceState(null, '', location.pathname + location.search);
+}
 const prefs = { voice: store.get('voice', '1') === '1', desk: store.get('desk') === '1', wake: store.get('wake') === '1' };
 let token = store.get('token');
 let ws = null, backoff = 1000, reqId = 0;
@@ -27,7 +35,7 @@ $('save').onclick = async () => {
   if (!r?.ok) return showSetup(r?.status === 401 ? 'The hub didn\'t accept that token.' : 'Couldn\'t reach the hub.');
   token = t; store.set('token', t); start();
 };
-$('logout').onclick = () => { store.set('token', null); location.reload(); };
+$('logout').onclick = () => { store.set('token', null); if (NATIVE) NATIVE.unpair(); else location.reload(); };
 
 // ---------- feed ----------
 function add(kind, text, from) {
@@ -72,7 +80,7 @@ function connect() {
     else if (m.type === 'reply') { sphere.setMode('idle'); caption(''); add('', m.text, 'Jarvis'); speak(m.text); }
     else if (m.type === 'error') { sphere.setMode('idle'); caption(''); add('note', m.error); }
     else if (m.type === 'turn') { add('note', `${m.from}: ${m.user}`); add('', m.reply, `Jarvis · ${m.from}`); }
-    else if (m.type === 'say') { add('', m.text, m.from ? `Jarvis · from ${m.from}` : 'Jarvis'); speak(m.text); }
+    else if (m.type === 'say') { add('', m.text, m.from ? `Jarvis · from ${m.from}` : 'Jarvis'); if (!NATIVE?.isListening()) speak(m.text); } // the app's background service speaks these itself
     else if (m.type === 'reminder') { add('note', m.text); loadMemory(); }
     else if (m.type === 'memory') loadMemory();
     else if (m.type === 'wake_granted' || m.type === 'wake_yield') onWakeResult(m);
@@ -125,6 +133,7 @@ async function startRec() {
   try { stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true } }); }
   catch { return add('note', 'Microphone permission is needed for voice.'); }
   pauseWake();
+  NATIVE?.pauseMic();
   const type = ['audio/webm;codecs=opus', 'audio/webm', 'audio/mp4'].find((t) => MediaRecorder.isTypeSupported(t)) ?? '';
   rec = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
   chunks = [];
@@ -143,6 +152,7 @@ function stopRec() {
   if (!rec) return;
   clearInterval(meter); rec._ac?.close();
   rec.stop(); stream.getTracks().forEach((t) => t.stop());
+  NATIVE?.resumeMic();
   $('mic').classList.remove('live');
 }
 async function sendRec() {
@@ -210,12 +220,24 @@ function chip(id, key, on, after) {
 const initialWake = prefs.wake;
 chip('voiceBtn', 'voice', prefs.voice, (v) => { if (!v) speechSynthesis?.cancel(); });
 chip('deskBtn', 'desk', prefs.desk);
-const setWakePref = chip('wakeBtn', 'wake', false, (v) => (v ? startWake() : stopWake()));
+let setWakePref;
+if (NATIVE) {
+  // In the Android app, "Always listening" runs in the background with the screen off (a notification shows it).
+  const b = $('wakeBtn');
+  b.textContent = 'Always listening';
+  b.title = 'Listen for "Jarvis" in the background, even with the screen off';
+  const sync = () => { const on = NATIVE.isListening(); b.setAttribute('aria-pressed', String(on)); b.textContent = on ? `Always listening · ${NATIVE.status()}` : 'Always listening'; };
+  b.onclick = () => { NATIVE.isListening() ? NATIVE.stopListening() : NATIVE.startListening(); setTimeout(sync, 800); };
+  setInterval(sync, 2000); sync();
+  setWakePref = () => {};
+} else {
+  setWakePref = chip('wakeBtn', 'wake', false, (v) => (v ? startWake() : stopWake()));
+}
 
 // ---------- go ----------
 function start() {
   $('setup').classList.add('hidden'); $('app').classList.remove('hidden');
   connect();
-  if (initialWake) setWakePref(true); // browsers need a tap first; if refused, the chip turns itself off
+  if (initialWake && !NATIVE) setWakePref(true); // browsers need a tap first; if refused, the chip turns itself off
 }
 if (token) start(); else showSetup();

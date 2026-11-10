@@ -1,0 +1,226 @@
+# Jarvis builds for this fork: the Android app (APK) and the Windows desktop app with Jarvis Hub sync, published
+# together as a GitHub release. The desktop app's in-app updater reads this fork's releases (not upstream's), so
+# updates keep the sync code. Runs on every push to main that touches the apps, after an upstream sync, or by hand.
+#
+# Secrets (Settings → Secrets and variables → Actions):
+#   JARVIS_ANDROID_KEYSTORE   base64 of the Android keystore (same key every build, so updates install over the app)
+#   JARVIS_SIGNING_PASSWORD   its password
+#   JARVIS_UPDATER_KEY        the desktop updater's private key (its public half is jarvis/signing/updater.key.pub)
+#   JARVIS_UPDATER_PASSWORD   that key's password
+# Without them the APK is debug-signed and the desktop build has no auto-update, but both still build.
+name: Jarvis build
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'jarvis/**'
+      - 'server/jarvis-hub/web/**'
+      - 'showcase/**'
+      - '.github/workflows/jarvis-build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: jarvis-build
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    outputs:
+      desktop: ${{ steps.v.outputs.desktop }}
+      code: ${{ steps.v.outputs.code }}
+    steps:
+      - uses: actions/checkout@v4
+      # Upstream's version X.Y.Z becomes X.Y.(Z*1000 + build), so every Jarvis build is newer than the last one
+      # and than the upstream release it is based on, and an upstream bump still sorts above older Jarvis builds.
+      - id: v
+        run: |
+          BASE=$(node -p "require('./showcase/tauri/src-tauri/tauri.conf.json').version")
+          IFS=. read -r MA MI PA <<< "$BASE"
+          N=$(( GITHUB_RUN_NUMBER % 1000 ))
+          echo "desktop=$MA.$MI.$(( PA * 1000 + N ))" >> "$GITHUB_OUTPUT"
+          echo "code=$(( 1000 + GITHUB_RUN_NUMBER ))" >> "$GITHUB_OUTPUT"
+          echo "Jarvis $MA.$MI.$(( PA * 1000 + N )) (from upstream $BASE)"
+
+  android:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: android-actions/setup-android@v3
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.14.3'
+
+      # The offline wake-word model (Vosk, Apache-2.0), packed into the APK so "Jarvis" is heard without internet.
+      - name: Wake-word model
+        run: |
+          set -e
+          M=vosk-model-small-en-us-0.15
+          curl -fsSL --retry 3 -o /tmp/model.zip "https://alphacephei.com/vosk/models/$M.zip"
+          unzip -q /tmp/model.zip -d /tmp
+          A=jarvis/android/app/src/main/assets/model-en
+          rm -rf "$A" && mkdir -p "$A" && cp -R /tmp/$M/* "$A"/
+          echo "$GITHUB_SHA-$GITHUB_RUN_ID" > "$A/uuid"
+          du -sh "$A"
+
+      - name: Build APK
+        env:
+          JARVIS_ANDROID_KEYSTORE: ${{ secrets.JARVIS_ANDROID_KEYSTORE }}
+          JARVIS_SIGNING_PASSWORD: ${{ secrets.JARVIS_SIGNING_PASSWORD }}
+          JARVIS_VERSION_CODE: ${{ needs.version.outputs.code }}
+          JARVIS_VERSION_NAME: ${{ needs.version.outputs.desktop }}
+        run: |
+          if [ -n "$JARVIS_ANDROID_KEYSTORE" ]; then
+            echo "$JARVIS_ANDROID_KEYSTORE" | base64 -d > "$RUNNER_TEMP/jarvis.p12"
+            export JARVIS_KEYSTORE_PATH="$RUNNER_TEMP/jarvis.p12"
+          fi
+          gradle -p jarvis/android assembleRelease --no-daemon --stacktrace
+          rm -f "$RUNNER_TEMP/jarvis.p12"
+          cp jarvis/android/app/build/outputs/apk/release/app-release.apk "Jarvis-${{ needs.version.outputs.desktop }}.apk"
+          [ -n "$JARVIS_ANDROID_KEYSTORE" ] || echo "::warning::JARVIS_ANDROID_KEYSTORE is not set: the APK is debug-signed, so later builds won't install over it."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android
+          path: Jarvis-*.apk
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 75
+    defaults:
+      run:
+        shell: bash
+        working-directory: showcase/tauri
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: showcase/tauri/sidecar/package-lock.json
+      - name: Install and test the sidecar
+        working-directory: showcase/tauri/sidecar
+        run: npm ci && npm test
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            showcase/tauri/src-tauri -> target
+            showcase/tauri/src-tauri/voice-win -> target
+            showcase/tauri/src-tauri/hands-win -> target
+          key: jarvis-windows
+      - name: Install the Tauri CLI
+        run: cargo install tauri-cli --version "^2" --locked
+
+      # Point the updater at this fork with this fork's key, and stamp the Jarvis version. Done here, not in the
+      # committed file, so merging upstream changes to tauri.conf.json never conflicts.
+      - name: Jarvis settings
+        env:
+          VERSION: ${{ needs.version.outputs.desktop }}
+          HAS_KEY: ${{ secrets.JARVIS_UPDATER_KEY != '' }}
+        run: |
+          node -e '
+            const fs = require("fs"), f = "src-tauri/tauri.conf.json", c = JSON.parse(fs.readFileSync(f, "utf8"));
+            const repo = process.env.GITHUB_REPOSITORY;
+            c.version = process.env.VERSION;
+            c.plugins.updater.pubkey = fs.readFileSync("../../jarvis/signing/updater.key.pub", "utf8").trim();
+            c.plugins.updater.endpoints = [`https://github.com/${repo}/releases/latest/download/latest.json`];
+            if (process.env.HAS_KEY !== "true") c.bundle.createUpdaterArtifacts = false;
+            fs.writeFileSync(f, JSON.stringify(c, null, 2));
+            console.log("version", c.version, "updater", c.plugins.updater.endpoints[0]);
+          '
+
+      - name: Prefetch NSIS
+        shell: pwsh
+        working-directory: .
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          try {
+            $dir = Join-Path $env:LOCALAPPDATA 'tauri'; $tmp = Join-Path $env:RUNNER_TEMP 'nsis'
+            New-Item -ItemType Directory -Force -Path $tmp | Out-Null
+            gh release download nsis-3.13 -R tauri-apps/binary-releases -p nsis-3.13.zip -D $tmp --clobber
+            if ($LASTEXITCODE) { throw 'nsis download failed' }
+            gh release download nsis_tauri_utils-v0.5.3 -R tauri-apps/nsis-tauri-utils -p nsis_tauri_utils.dll -D $tmp --clobber
+            if ($LASTEXITCODE) { throw 'nsis_tauri_utils download failed' }
+            if ((Get-FileHash (Join-Path $tmp 'nsis_tauri_utils.dll') -Algorithm SHA1).Hash -ne '75197FEE3C6A814FE035788D1C34EAD39349B860') { throw 'nsis_tauri_utils hash mismatch' }
+            Expand-Archive -Path (Join-Path $tmp 'nsis-3.13.zip') -DestinationPath $tmp -Force
+            New-Item -ItemType Directory -Force -Path $dir | Out-Null
+            if (Test-Path (Join-Path $dir 'NSIS')) { Remove-Item -Recurse -Force (Join-Path $dir 'NSIS') }
+            Move-Item (Join-Path $tmp 'nsis-3.13') (Join-Path $dir 'NSIS')
+            $add = Join-Path $dir 'NSIS\Plugins\x86-unicode\additional'
+            New-Item -ItemType Directory -Force -Path $add | Out-Null
+            Copy-Item (Join-Path $tmp 'nsis_tauri_utils.dll') $add
+          } catch { Write-Host "Couldn't prefetch NSIS ($_); the bundler will download it itself." }
+
+      - name: Build
+        env:
+          TAURI_BUNDLES: nsis
+          JARVIS_UPDATER_KEY: ${{ secrets.JARVIS_UPDATER_KEY }}
+          JARVIS_UPDATER_PASSWORD: ${{ secrets.JARVIS_UPDATER_PASSWORD }}
+        run: |
+          if [ -n "$JARVIS_UPDATER_KEY" ]; then
+            export TAURI_SIGNING_PRIVATE_KEY="$JARVIS_UPDATER_KEY"
+            export TAURI_SIGNING_PRIVATE_KEY_PASSWORD="$JARVIS_UPDATER_PASSWORD"
+          fi
+          ./build.sh release --target x86_64-pc-windows-msvc
+          mkdir -p ../../out
+          B=src-tauri/target/x86_64-pc-windows-msvc/release/bundle/nsis
+          cp $B/*-setup.exe ../../out/
+          cp $B/*-setup.exe.sig ../../out/ 2>/dev/null || true
+          ls -la ../../out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: out/*
+
+  release:
+    needs: [version, android, windows]
+    if: always() && needs.version.result == 'success' && (needs.android.result == 'success' || needs.windows.result == 'success')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.desktop }}
+        run: |
+          set -e
+          ls -la dist
+          TAG="jarvis-v$VERSION"
+          EXE=$(cd dist && ls *-setup.exe 2>/dev/null | head -1 || true)
+          FILES=(dist/*)
+          if [ -n "$EXE" ] && [ -f "dist/$EXE.sig" ]; then
+            URL="https://github.com/$GITHUB_REPOSITORY/releases/download/$TAG/$EXE"
+            SIG=$(cat "dist/$EXE.sig")
+            node -e '
+              const [v, url, sig] = process.argv.slice(1);
+              require("fs").writeFileSync("dist/latest.json", JSON.stringify({ version: v, notes: `Jarvis ${v}`, pub_date: new Date().toISOString(), platforms: { "windows-x86_64": { signature: sig, url } } }, null, 2));
+            ' "$VERSION" "$URL" "$SIG"
+            FILES=(dist/*)
+          fi
+          cat > notes.md <<NOTES
+          Jarvis build $VERSION from \`${GITHUB_SHA:0:7}\`.
+
+          - **Android:** \`Jarvis-$VERSION.apk\` — install, open, tap the pairing link from the hub installer.
+          - **Windows:** \`${EXE:-(not built this time)}\` — Roamies with Jarvis Hub sync. Updates itself from this repo.
+          NOTES
+          gh release create "$TAG" "${FILES[@]}" --title "Jarvis $VERSION" --notes-file notes.md --latest

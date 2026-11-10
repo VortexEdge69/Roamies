@@ -22,3 +22,7 @@ node_modules/
 # Jarvis Hub runtime data and secrets
 server/jarvis-hub/data/
 server/jarvis-hub/.env
+
+# Private signing keys never go in the repo (they live in GitHub secrets)
+jarvis/signing/*.p12
+jarvis/signing/*.key

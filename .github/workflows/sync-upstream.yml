@@ -1,0 +1,96 @@
+# Keeps this fork up to date with KenKaiii/Roamies without breaking Jarvis.
+# Daily: merge upstream main into a test branch, run every test (Roamies' own and Jarvis Hub's). Only if the merge
+# is clean and everything passes does it land on main, which then triggers a fresh Jarvis build.
+# Anything else (a conflict, a failing test, an upstream workflow change the bot can't push) opens an issue and
+# leaves main untouched.
+name: Sync upstream
+
+on:
+  schedule:
+    - cron: '17 21 * * *'   # 02:47 in India
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+  actions: write
+
+concurrency:
+  group: sync-upstream
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      GH_TOKEN: ${{ github.token }}
+      UPSTREAM: https://github.com/KenKaiii/Roamies.git
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Merge upstream
+        id: merge
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git remote add upstream "$UPSTREAM"
+          git fetch -q upstream main
+          if git merge-base --is-ancestor upstream/main HEAD; then
+            echo "Already up to date with upstream."; echo "result=current" >> "$GITHUB_OUTPUT"; exit 0
+          fi
+          echo "New upstream commits:"; git log --oneline HEAD..upstream/main | head -30
+          if git merge --no-edit upstream/main; then
+            echo "result=merged" >> "$GITHUB_OUTPUT"
+          else
+            git diff --name-only --diff-filter=U > conflicts.txt
+            git merge --abort
+            echo "result=conflict" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-node@v4
+        if: steps.merge.outputs.result == 'merged'
+        with:
+          node-version: 24
+
+      - name: Test everything
+        id: test
+        if: steps.merge.outputs.result == 'merged'
+        run: |
+          (cd showcase/tauri/sidecar && npm ci && npm test) > test.log 2>&1 \
+            && (cd server/jarvis-hub && npm ci && npm test) >> test.log 2>&1 \
+            && echo "ok=true" >> "$GITHUB_OUTPUT" || { echo "ok=false" >> "$GITHUB_OUTPUT"; tail -60 test.log; }
+
+      - name: Land on main
+        if: steps.merge.outputs.result == 'merged' && steps.test.outputs.ok == 'true'
+        run: |
+          if git push origin HEAD:main 2> push.err; then
+            echo "Merged upstream into main."
+            gh workflow run jarvis-build.yml --ref main
+          else
+            cat push.err
+            echo "PUSH_FAILED=1" >> "$GITHUB_ENV"
+          fi
+
+      - name: Report problems
+        if: steps.merge.outputs.result == 'conflict' || steps.test.outputs.ok == 'false' || env.PUSH_FAILED == '1'
+        run: |
+          UP=$(git rev-parse --short upstream/main)
+          if [ "${{ steps.merge.outputs.result }}" = conflict ]; then
+            WHY="Merging upstream \`$UP\` conflicts with Jarvis changes in:"$'\n\n'"$(sed 's/^/- /' conflicts.txt)"
+          elif [ "${PUSH_FAILED:-}" = 1 ]; then
+            WHY="Upstream \`$UP\` merges and passes every test, but it changes workflow files, which the bot isn't allowed to push. Open the repo on GitHub and press **Sync fork → Update branch** (that merge is already known to pass)."
+          else
+            WHY="Upstream \`$UP\` merges cleanly but tests fail, so main was left alone. Last lines:"$'\n\n```\n'"$(tail -40 test.log)"$'\n```'
+          fi
+          TITLE="Upstream sync needs attention ($UP)"
+          if gh issue list --state open --search "$TITLE in:title" --json number --jq '.[0].number' | grep -q .; then
+            echo "Issue already open."
+          else
+            # Forks start with Issues off; then the failed run (GitHub emails you about it) is the alert.
+            gh issue create --title "$TITLE" --body "$WHY"$'\n\n'"Jarvis keeps running on the last good version; nothing is broken. Run: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}" || true
+          fi
+          echo "::error::$TITLE"
+          exit 1

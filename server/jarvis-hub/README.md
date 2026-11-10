@@ -26,27 +26,20 @@ The always-on centre of a multi-device Jarvis built on Roamies. It runs on your 
 ## Install on the VPS (Ubuntu 22.04 / 24.04)
 
 1. Point a DNS **A record** for your domain (e.g. `jarvis.vecrahost.in`) at the VPS IP.
-2. On the VPS:
+2. On the VPS, one command (keys optional; you can add them to `.env` later):
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/VortexEdge69/Roamies/main/server/jarvis-hub/deploy/install.sh -o install.sh
-sudo bash install.sh jarvis.vecrahost.in
+curl -fsSL https://raw.githubusercontent.com/VortexEdge69/Roamies/main/server/jarvis-hub/deploy/install.sh | sudo ANTHROPIC_API_KEY=sk-ant-... GROQ_API_KEY=gsk_... bash -s -- jarvis.vecrahost.in
 ```
 
-That installs Node 22, Caddy (automatic HTTPS), the hub as the `jarvis-hub` systemd service, and opens only ports 22, 80 and 443. Run it again any time to update.
+It installs Node 22, Caddy (automatic HTTPS), the hub as the `jarvis-hub` service, a firewall (22/80/443 only) and a daily self-update that rolls back on failure. On first install it prints a token for `desktop`, `phone` and `pendant`, a one-tap `jarvis://pair` link for the Android app, and the desktop `hub.json` line. Run it again any time; it keeps your `.env`, data and tokens.
 
-3. Add keys to `/opt/jarvis/server/jarvis-hub/.env` (see `.env.example`), then `sudo systemctl restart jarvis-hub`:
-   - `ANTHROPIC_API_KEY` (or any OpenAI-compatible API) for the hub's brain
-   - `GROQ_API_KEY` for speech-to-text (pendant and phone voice)
-
-4. Add a token per device (each is shown once):
+Manage devices later:
 
 ```sh
 cd /opt/jarvis/server/jarvis-hub
-sudo -u jarvis node src/cli.mjs add desktop desktop
-sudo -u jarvis node src/cli.mjs add phone phone
-sudo -u jarvis node src/cli.mjs add pendant pendant
-sudo -u jarvis node src/cli.mjs list             # see devices and when they were last seen
+sudo -u jarvis node src/cli.mjs add tablet phone
+sudo -u jarvis node src/cli.mjs list
 sudo -u jarvis node src/cli.mjs remove phone    # revoke a lost device
 ```
 
@@ -60,7 +53,7 @@ sudo -u jarvis node src/cli.mjs remove phone    # revoke a lost device
 
 Restart Roamies. It syncs memory and conversations, speaks lines sent from the phone, and runs requests handed to it. Without that file Roamies behaves exactly as before.
 
-**Android.** Open `https://jarvis.vecrahost.in` in Chrome, paste the phone token, then Chrome menu → *Add to Home screen*. You get the JARVIS globe with your memory drawn around it as a brain (tap **Brain** for the list), hold-to-talk, spoken replies, and *Hey Jarvis* while the app is open. *Run on desktop* sends requests straight to your computer.
+**Android app.** Install the APK from this repo's latest *Jarvis* release, then open the `jarvis://pair` link the installer printed (or paste the hub address and phone token). Turn on *Always listening* to hear "Jarvis" with the screen off. Without the app: open the hub URL in Chrome and *Add to Home screen*. You get the JARVIS globe with your memory drawn around it as a brain (tap **Brain** for the list), hold-to-talk, spoken replies, and *Hey Jarvis* while the app is open. *Run on desktop* sends requests straight to your computer.
 
 **Mic pendant.** Connect a WebSocket to `wss://<domain>/v1/audio` with header `Authorization: Bearer <pendant token>` and subprotocol `jarvis.v1`, then:
 
