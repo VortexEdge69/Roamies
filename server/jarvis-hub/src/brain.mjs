@@ -3,17 +3,22 @@
 // and commitments, and it can hand a request to your desktop when it needs your computer.
 //
 // Providers (set in .env):
+//   claude               CLAUDE_CODE_OAUTH_TOKEN: your Claude Pro/Max subscription, signed in through a link
+//                        (`npm run login` on the VPS runs `claude setup-token`). HUB_MODEL default haiku.
 //   anthropic            ANTHROPIC_API_KEY, HUB_MODEL (default claude-haiku-5-5)
 //   openai-compatible    OPENAI_API_KEY, OPENAI_BASE_URL (OpenAI, Groq, OpenRouter, a local Ollama...), HUB_MODEL
 import { addHubTurn, editMemory, getHubChat, getMemory, latestSession, newId } from './db.mjs';
 
-const P = () => ({
-  provider: process.env.HUB_PROVIDER || (process.env.ANTHROPIC_API_KEY ? 'anthropic' : process.env.OPENAI_API_KEY ? 'openai' : null),
-  model: process.env.HUB_MODEL || (process.env.ANTHROPIC_API_KEY ? 'claude-haiku-5-5' : 'gpt-4o-mini'),
+const P = () => {
+  const provider = process.env.HUB_PROVIDER || (process.env.CLAUDE_CODE_OAUTH_TOKEN ? 'claude' : process.env.ANTHROPIC_API_KEY ? 'anthropic' : process.env.OPENAI_API_KEY ? 'openai' : null);
+  return {
+  provider,
+  model: process.env.HUB_MODEL || (provider === 'claude' ? 'haiku' : provider === 'anthropic' ? 'claude-haiku-5-5' : 'gpt-4o-mini'),
   user: process.env.HUB_USER_NAME || 'sir',
   name: process.env.HUB_ASSISTANT_NAME || 'Jarvis',
   tz: process.env.TZ || 'Asia/Kolkata',
-});
+  };
+};
 
 export const brainReady = () => !!P().provider;
 
@@ -159,12 +164,14 @@ async function openaiCall(system, messages) {
  */
 export async function chat(text, ctx) {
   const p = P();
-  if (!p.provider) return { reply: 'My brain has no API key yet. Add ANTHROPIC_API_KEY or OPENAI_API_KEY to the hub .env, sir.', memoryChanged: false };
+  if (!p.provider) return { reply: 'My brain isn\'t signed in yet, sir. On the server, run: sudo bash /opt/jarvis/server/jarvis-hub/deploy/login.sh (or add an API key to the .env).', memoryChanged: false };
   const system = await systemPrompt(ctx);
   const history = getHubChat().turns.slice(-12).flatMap((t) => [{ role: 'user', content: t.user }, { role: 'assistant', content: t.reply }]);
   let reply = '';
 
-  if (p.provider === 'anthropic') {
+  if (p.provider === 'claude') {
+    reply = await claudeSubscription(system, history, text, ctx);
+  } else if (p.provider === 'anthropic') {
     const messages = [...history, { role: 'user', content: text }];
     for (let step = 0; step < 6; step++) {
       const out = await anthropicCall(system, messages);
@@ -194,4 +201,51 @@ export async function chat(text, ctx) {
   reply ||= 'Done, sir.';
   await addHubTurn({ device: ctx.device, user: text.slice(0, 4000), reply: reply.slice(0, 8000) });
   return { reply, memoryChanged: !!ctx.memoryChanged };
+}
+
+// ---------- Claude subscription (Claude Agent SDK, signed in with `claude setup-token`) ----------
+// Runs Claude Code headless with none of its own tools: only Jarvis's memory tools, through an in-process MCP server.
+let sdk = null;
+async function claudeSubscription(system, history, text, ctx) {
+  sdk ??= { ...(await import('@anthropic-ai/claude-agent-sdk')), z: (await import('zod')).z };
+  const { query, tool, createSdkMcpServer, z } = sdk;
+  const shape = (t) => Object.fromEntries(Object.entries(t.params).map(([k, v]) => {
+    let s = v.enum ? z.enum(v.enum) : v.type === 'boolean' ? z.boolean() : z.string();
+    if (v.description) s = s.describe(v.description);
+    return [k, t.required.includes(k) ? s : s.optional()];
+  }));
+  const server = createSdkMcpServer({
+    name: 'jarvis',
+    version: '1.0.0',
+    tools: TOOLS.map((t) => tool(t.name, t.description, shape(t), async (args) => ({ content: [{ type: 'text', text: await runTool(t.name, args ?? {}, ctx) }] }))),
+  });
+  const past = history.length ? `\n\nRecent conversation (oldest first):\n${history.map((m) => `${m.role === 'user' ? 'User' : 'You'}: ${m.content}`).join('\n')}` : '';
+  const configDir = process.env.CLAUDE_CONFIG_DIR || '/var/lib/jarvis-hub/claude';
+  (await import('node:fs')).mkdirSync(configDir, { recursive: true, mode: 0o700 });
+  let out = '', last = '';
+  for await (const m of query({
+    prompt: text,
+    options: {
+      model: P().model,
+      systemPrompt: { type: 'custom', prompt: system + past },
+      tools: [],
+      settingSources: [],
+      strictMcpConfig: true,
+      mcpServers: { jarvis: server },
+      allowedTools: TOOLS.map((t) => `mcp__jarvis__${t.name}`),
+      permissionMode: 'dontAsk', // anything not listed above is refused
+      maxTurns: 6,
+      cwd: configDir,
+      env: { ...process.env, CLAUDE_CONFIG_DIR: configDir, ANTHROPIC_API_KEY: '' },
+    },
+  })) {
+    if (m.type === 'assistant') {
+      const t = (m.message?.content ?? []).filter((b) => b.type === 'text').map((b) => b.text).join('').trim();
+      if (t) last = t;
+    } else if (m.type === 'result') {
+      if (m.subtype === 'success' && typeof m.result === 'string' && m.result.trim()) out = m.result.trim();
+      else if (m.is_error) throw new Error(`Claude: ${String(m.result ?? m.subtype).slice(0, 200)}`);
+    }
+  }
+  return out || last;
 }

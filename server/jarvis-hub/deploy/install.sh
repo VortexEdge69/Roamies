@@ -3,8 +3,8 @@
 #
 #   curl -fsSL https://raw.githubusercontent.com/VortexEdge69/Roamies/main/server/jarvis-hub/deploy/install.sh | sudo bash -s -- jarvis.vecrahost.in
 #
-# Optional, to finish setup in the same command (otherwise edit /opt/jarvis/server/jarvis-hub/.env later):
-#   curl -fsSL …/install.sh | sudo ANTHROPIC_API_KEY=sk-ant-… GROQ_API_KEY=gsk_… bash -s -- jarvis.vecrahost.in
+# During install it shows a claude.ai link to sign Jarvis's brain in with your Claude subscription (no API key).
+# Optional: GROQ_API_KEY=gsk_… (free) before `bash` turns on voice; ANTHROPIC_API_KEY=… uses an API key instead.
 #
 # Installs Node 22, Caddy (automatic HTTPS), the hub as a systemd service, a firewall, and a daily safe
 # self-update that rolls back on failure. Creates device tokens for desktop, phone and pendant on first run.
@@ -79,7 +79,19 @@ setenv OPENAI_API_KEY "${OPENAI_API_KEY:-}"
 setenv HUB_USER_NAME "${HUB_USER_NAME:-}"
 chown jarvis:jarvis "$ENV"; chmod 600 "$ENV"
 
+echo "==> Brain sign-in"
+if ! grep -qE '^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY)=.+' "$ENV"; then
+  if [ -r /dev/tty ] && [ "${SKIP_LOGIN:-0}" != 1 ]; then
+    bash "$HUB/deploy/login.sh" || echo "   Sign-in skipped. Later: sudo bash $HUB/deploy/login.sh"
+  else
+    echo "   No terminal here. Later: sudo bash $HUB/deploy/login.sh"
+  fi
+else
+  echo "   already set"
+fi
+
 echo "==> Services"
+mkdir -p "$DATA/claude" && chown jarvis:jarvis "$DATA/claude" && chmod 700 "$DATA/claude"
 cp "$HUB/deploy/jarvis-hub.service" "$HUB/deploy/jarvis-hub-update.service" "$HUB/deploy/jarvis-hub-update.timer" /etc/systemd/system/
 systemctl daemon-reload
 systemctl enable -q jarvis-hub jarvis-hub-update.timer
@@ -135,7 +147,7 @@ if [ -n "$TOKENS" ]; then
    {"url":"https://$DOMAIN","token":"$DESK","name":"desktop"}
 MSG
 fi
-grep -qE '^(ANTHROPIC_API_KEY|OPENAI_API_KEY)=.+' "$ENV" || echo -e "\n Add a brain key:  sudo nano $ENV   (ANTHROPIC_API_KEY=…), then: sudo systemctl restart jarvis-hub"
+grep -qE '^(CLAUDE_CODE_OAUTH_TOKEN|ANTHROPIC_API_KEY|OPENAI_API_KEY)=.+' "$ENV" || echo -e "\n Sign the brain in:  sudo bash $HUB/deploy/login.sh   (opens a claude.ai link, no API key)"
 grep -qE '^(GROQ_API_KEY|STT_API_KEY|OPENAI_API_KEY)=.+' "$ENV" || echo " Add a speech key: GROQ_API_KEY=… in the same file (free at console.groq.com)"
 cat <<MSG
 

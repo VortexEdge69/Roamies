@@ -26,11 +26,13 @@ The always-on centre of a multi-device Jarvis built on Roamies. It runs on your 
 ## Install on the VPS (Ubuntu 22.04 / 24.04)
 
 1. Point a DNS **A record** for your domain (e.g. `jarvis.vecrahost.in`) at the VPS IP.
-2. On the VPS, one command (keys optional; you can add them to `.env` later):
+2. On the VPS, one command:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/VortexEdge69/Roamies/main/server/jarvis-hub/deploy/install.sh | sudo ANTHROPIC_API_KEY=sk-ant-... GROQ_API_KEY=gsk_... bash -s -- jarvis.vecrahost.in
+curl -fsSL https://raw.githubusercontent.com/VortexEdge69/Roamies/main/server/jarvis-hub/deploy/install.sh | sudo bash -s -- jarvis.vecrahost.in
 ```
+
+Partway through it shows a **claude.ai link**: open it on your phone, sign in with your Claude Pro/Max account, approve, and paste the token it shows back into the terminal. That signs Jarvis's brain in with your subscription; no API key. (Renew or switch accounts later with `sudo bash /opt/jarvis/server/jarvis-hub/deploy/login.sh`.) For voice (pendant, phone talk), add a free Groq key: put `GROQ_API_KEY=gsk_...` before `bash` in the command, or in `.env` later.
 
 It installs Node 22, Caddy (automatic HTTPS), the hub as the `jarvis-hub` service, a firewall (22/80/443 only) and a daily self-update that rolls back on failure. On first install it prints a token for `desktop`, `phone` and `pendant`, a one-tap `jarvis://pair` link for the Android app, and the desktop `hub.json` line. Run it again any time; it keeps your `.env`, data and tokens.
 
