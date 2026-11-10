@@ -9,7 +9,11 @@ main() {
   [ "$(id -u)" = 0 ] || { echo "Run with sudo."; exit 1; }
   [ -r /dev/tty ] || { echo "Needs an interactive terminal (an SSH session)."; exit 1; }
   local CLAUDE
-  CLAUDE=$(ls "$HUB"/node_modules/@anthropic-ai/claude-agent-sdk-linux-*/claude 2>/dev/null | head -1 || true)
+  # npm may install both the glibc and musl builds; pick the one this system can run.
+  local ARCH LIBC=""
+  case "$(uname -m)" in x86_64) ARCH=x64 ;; aarch64|arm64) ARCH=arm64 ;; *) echo "Unsupported CPU $(uname -m)"; exit 1 ;; esac
+  ldd --version 2>&1 | grep -qi musl && LIBC=-musl
+  CLAUDE="$HUB/node_modules/@anthropic-ai/claude-agent-sdk-linux-$ARCH$LIBC/claude"
   [ -x "$CLAUDE" ] || { echo "Claude Code wasn't installed with the hub; run the installer again."; exit 1; }
   mkdir -p "$CFG" && chown jarvis:jarvis "$CFG" && chmod 700 "$CFG"
 
