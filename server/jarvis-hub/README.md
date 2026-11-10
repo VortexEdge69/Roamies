@@ -43,11 +43,11 @@ That installs Node 22, Caddy (automatic HTTPS), the hub as the `jarvis-hub` syst
 
 ```sh
 cd /opt/jarvis/server/jarvis-hub
-sudo -u jarvis HUB_ENV_FILE=$PWD/.env npm run device -- add desktop desktop
-sudo -u jarvis HUB_ENV_FILE=$PWD/.env npm run device -- add phone phone
-sudo -u jarvis HUB_ENV_FILE=$PWD/.env npm run device -- add pendant pendant
-npm run device -- list            # see devices and when they were last seen
-npm run device -- remove phone    # revoke a lost device
+sudo -u jarvis node src/cli.mjs add desktop desktop
+sudo -u jarvis node src/cli.mjs add phone phone
+sudo -u jarvis node src/cli.mjs add pendant pendant
+sudo -u jarvis node src/cli.mjs list             # see devices and when they were last seen
+sudo -u jarvis node src/cli.mjs remove phone    # revoke a lost device
 ```
 
 ## Connect your devices

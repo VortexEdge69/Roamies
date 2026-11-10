@@ -90,9 +90,9 @@ Next:
   1. Add your API keys:   sudo nano $HUB/.env     (ANTHROPIC_API_KEY, GROQ_API_KEY)
                           sudo systemctl restart jarvis-hub
   2. Add your devices (each prints a token, shown once):
-       cd $HUB && sudo -u jarvis HUB_ENV_FILE=$HUB/.env npm run device -- add desktop desktop
-       cd $HUB && sudo -u jarvis HUB_ENV_FILE=$HUB/.env npm run device -- add phone phone
-       cd $HUB && sudo -u jarvis HUB_ENV_FILE=$HUB/.env npm run device -- add pendant pendant
+       cd $HUB && sudo -u jarvis node src/cli.mjs add desktop desktop
+       cd $HUB && sudo -u jarvis node src/cli.mjs add phone phone
+       cd $HUB && sudo -u jarvis node src/cli.mjs add pendant pendant
   3. Desktop: save ~/.gg/sidekick/hub.json  {"url":"https://$DOMAIN","token":"jh_..."}  and restart Roamies.
      Phone: open https://$DOMAIN in Chrome, paste the phone token, then menu → Add to Home screen.
   Logs: journalctl -u jarvis-hub -f
